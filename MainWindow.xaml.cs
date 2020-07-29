@@ -5,22 +5,15 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using System.Web;
 using System.Windows;
-using System.Windows.Documents;
-using System.Windows.Media;
 using Microsoft.Win32;
 
 namespace MegaDiffView
 {
-  /// <summary>
-  /// Interaction logic for MainWindow.xaml
-  /// </summary>
   public partial class MainWindow : Window, INotifyPropertyChanged
   {
     private Dictionary<string, string> _chunksDictionary;
-    private readonly Color _greenBackground = Color.FromRgb(235, 255, 235);
-    private readonly Color _redBackground = Color.FromRgb(255, 235, 235);
-    private readonly Color _whiteBackground = Color.FromRgb(255, 255, 255);
 
     private List<string> _fileNames;
     private string _selectedItem;
@@ -37,14 +30,75 @@ namespace MegaDiffView
       set
       {
         _selectedItem = value;
-        DiffContentBox.Inlines.Clear();
 
-        if (value != null)
+        if (value == null)
         {
-          DiffContentBox.Inlines.AddRange(
-            FormatDiffContent(value, _chunksDictionary[value])
-          );
+          return;
         }
+
+        const string head = @"
+  <style>
+    html,body { 
+      margin: 0;
+    }
+    body {
+      min-width: 2000px;
+      white-space: nowrap;
+      font-family: Consolas;
+      font-size: 10pt;
+    }
+    hr {
+      color: #DDDDDD;
+    }
+    code {
+      font-family: Consolas;
+      margin: 0;
+      white-space: pre;
+    }
+    .header-line {
+      background: #EEEEEE;
+    }
+    .line-number {
+      color: rgb(50, 180, 180);
+      display: inline-block;
+      width: 50px;
+      text-align: right;
+      margin-right: 10px;
+    }
+    .added {
+      background-color: rgb(235,255,235);
+    }
+    .deleted {
+      background-color: rgb(253,233,235);
+    }
+    .added code {
+      color: rgb(25, 170, 25);
+    }
+    .deleted code {
+      color: rgb(170, 25, 25);
+    }
+    .block-header {
+      color: #555555;
+    }
+    .block-divider {
+      width:50px;
+      text-align:right;
+      color: #555555;
+    }
+  </style>
+";
+        var body = string.Concat( FormatDiffContent( _chunksDictionary[value] ));
+        Browser.NavigateToString($@"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""UTF-8"">
+  {head}
+</head>
+<body>
+  {body}
+</body>
+</html>");
       }
     }
 
@@ -54,15 +108,14 @@ namespace MegaDiffView
       DataContext = this;
     }
 
-    private IEnumerable<Inline> FormatDiffContent(string header, string content)
+    private IEnumerable<string> FormatDiffContent(string content)
     {
       var lines = content.TrimEnd('\r','\n').Split("\r\n");
-      var maxLineLength = Math.Max( 80, lines.Max(line => line.Length));
 
       var headerRowCount = GetHeaderRowCount(lines);
       var headerLines = FormatHeader( lines.Take(headerRowCount) );
       var blocks = GetBlocks(lines.Skip(headerRowCount));
-      return headerLines.Concat(blocks.SelectMany(block => FormatBlock(block, maxLineLength)));
+      return headerLines.Concat(blocks.SelectMany((block, index) => FormatBlock(block, index==0)));
     }
 
     private int GetHeaderRowCount(string[] lines)
@@ -100,7 +153,7 @@ namespace MegaDiffView
           var header = line.Substring(line.LastIndexOf("@@")+2);
           if (string.IsNullOrWhiteSpace( header ))
           {
-            header = Environment.NewLine;
+            header = string.Empty;
           }
           block = new DiffBlock( header, info );
         }
@@ -113,23 +166,33 @@ namespace MegaDiffView
       yield return block;
     }
 
-    private IEnumerable<Inline> FormatHeader(IEnumerable<string> headerLines)
+    private IEnumerable<string> FormatHeader(IEnumerable<string> headerLines)
     {
-      return new Inline[]
+      return new[]
       {
-        new Run(string.Join("\r\n", headerLines)) {Background = new SolidColorBrush(Color.FromRgb(220,220,220))},
-        new LineBreak(),
-        new LineBreak()
+        string.Join("\r\n", headerLines.Select( l => $"<div class=\"header-line\">{l}</div>")),
+        "<br>"
       };
     }
 
-    private IEnumerable<Inline> FormatBlock(DiffBlock block, int maxLineLength)
+    private IEnumerable<string> FormatBlock(DiffBlock block, bool isFirstBlock)
     {
-      yield return new Bold(new Run(block.Header)
+      if (!isFirstBlock)
       {
-        Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150))
-      });
-      yield return new LineBreak();
+        yield return "<br>";
+      }
+
+      if (string.IsNullOrWhiteSpace(block.Header))
+      {
+        if (!isFirstBlock)
+        {
+          yield return $"<div class=\"block-divider\">{"...",-5}</div><br>";
+        }
+      }
+      else
+      {
+        yield return $"<div class=\"block-header\">{block.Header}</div><br>";
+      }
 
       var leftLineNumberOffset = 0;
       var rightLineNumberOffset = 0;
@@ -138,63 +201,30 @@ namespace MegaDiffView
       foreach (var line in block.Lines)
       {
         int lineNumber;
-        Color backgroundColor;
+        var cssClass = "";
 
         if (line.StartsWith('-'))
         {
           lineNumber = baselineNumber + leftLineNumberOffset++;
-          backgroundColor = _redBackground;
+          cssClass = "deleted";
         } else if (line.StartsWith('+'))
         {
           lineNumber = baselineNumber++ + rightLineNumberOffset++;
-          backgroundColor = _greenBackground;
+          cssClass = "added";
         }
         else
         {
           lineNumber = baselineNumber++;
-          backgroundColor = _whiteBackground;
         }
 
-        yield return new Run( lineNumber.ToString().PadLeft(5,' ') + " " )
-        {
-          Foreground = new SolidColorBrush(Color.FromRgb(80, 140, 200)),
-          Background = new SolidColorBrush(backgroundColor)
-        };
-        yield return FormatDiffLine( line, maxLineLength );
-        yield return new LineBreak();
+        yield return $"<div class=\"{cssClass}\"><span class=\"line-number\">{lineNumber,-5} </span>";
+        yield return $"<code>";
+        yield return HttpUtility.HtmlEncode( line.Substring(1) );
+        yield return "</code>";
+        yield return "</div>";
       }
 
-      yield return new LineBreak();
-    }
-
-    private Inline FormatDiffLine(string line, int maxLineLength)
-    {
-      if (line.Length < 1)
-      {
-        return new Run(line);
-      }
-
-      var controlChar = line.Substring(0, 1);
-      var color = Color.FromRgb(0, 0, 0);
-      var background = Color.FromRgb(255,255,255);
-
-      switch (controlChar)
-      {
-        case "-":
-          color = Color.FromRgb(170, 25, 25);
-          background = _redBackground;
-          break;
-        case "+":
-          color = Color.FromRgb(25, 170, 25);
-          background = _greenBackground;
-          break;
-      }
-
-      return new Run(line.Substring(1).PadRight(maxLineLength))
-      {
-        Foreground = new SolidColorBrush(color),
-        Background = new SolidColorBrush(background)
-      };
+      yield return Environment.NewLine;
     }
     
     public event PropertyChangedEventHandler PropertyChanged;
