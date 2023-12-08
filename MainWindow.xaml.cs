@@ -124,7 +124,9 @@ namespace MegaDiffView
 
         private IEnumerable<string> FormatDiffContent(string content)
         {
-            var lines = content.TrimEnd('\r', '\n').Split("\r\n");
+            var lines = content.TrimEnd('\r', '\n')
+              .Replace("\r", "")
+              .Split("\n");
 
             var headerRowCount = GetHeaderRowCount(lines);
             var headerLines = FormatHeader(lines.Take(headerRowCount));
